@@ -5,6 +5,8 @@ cmake_minimum_required(VERSION 3.16.3)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum OS X deployment version")
 
 project(binaryen LANGUAGES C CXX VERSION 133)
+# Distinguish the debug-preserving fork from unrepaired upstream version 133.
+set(PROJECT_VERSION "${PROJECT_VERSION}-tekacs.1")
 include(GNUInstallDirs)
 
 # The C++ standard whose features are required to build Binaryen.

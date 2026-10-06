@@ -1,251 +1,110 @@
-name: Create Release
+name: Build Release Artifacts
 
-# Trigger whenever a tag is created/updated
-
+# Run explicitly against a release tag. Publishing a tag does not launch builders.
 on:
-  push:
-    tags:
-      - "*"
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
-    name: build
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [macos-14, windows-latest, windows-11-arm]
+        include:
+          - runner: ubuntu-24.04
+            platform: x86_64-linux
+            suffix: ''
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: aarch64-linux
+            suffix: ''
+            arch: aarch64
+          - runner: macos-15-intel
+            platform: x86_64-macos
+            suffix: ''
+            arch: x86_64
+          - runner: macos-15
+            platform: arm64-macos
+            suffix: ''
+            arch: arm64
+          - runner: windows-latest
+            platform: x86_64-windows
+            suffix: .exe
+            arch: x64
+          - runner: windows-11-arm
+            platform: arm64-windows
+            suffix: .exe
+            arch: ARM64
     defaults:
       run:
         shell: bash
+    env:
+      SUFFIX: ${{ matrix.suffix }}
+      PLATFORM: ${{ matrix.platform }}
+      ARCH: ${{ matrix.arch }}
     steps:
-    - uses: actions/checkout@v4
-      with:
-        submodules: true
-
-    - name: install ninja (macos)
-      run: brew install ninja
-      if: startsWith(matrix.os, 'macos')
-
-    - name: install ninja (win)
-      run: choco install ninja
-      if: startsWith(matrix.os, 'windows')
-
-    - name: mkdir
-      run: mkdir -p out
-
-    - name: cmake (macos)
-      run: |
-        cmake -S . -B out -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=out/install -DCMAKE_OSX_ARCHITECTURES=x86_64
-        cmake -S . -B out-arm64 -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=out-arm64/install -DCMAKE_OSX_ARCHITECTURES=arm64
-      if: startsWith(matrix.os, 'macos')
-
-    - name: cmake (win)
-      # -G "Visual Studio 15 2017"
-      run: cmake -S . -B out -DCMAKE_INSTALL_PREFIX=out/install
-      if: matrix.os == 'windows-latest'
-
-    - name: cmake (win arm64)
-      # -G "Visual Studio 15 2017"
-      run: cmake -S . -B out -DCMAKE_INSTALL_PREFIX=out-arm64/install 
-      if: matrix.os == 'windows-11-arm'
-
-    - name: build
-      run: cmake --build out -v --config Release --target install
-
-    - name: build-arm64
-      run: cmake --build out-arm64 -v --config Release --target install
-      if: startsWith(matrix.os, 'macos')
-
-    - name: strip
-      run: find out*/install/ -type f -perm -u=x -exec strip -x {} +
-      if: ${{ !startsWith(matrix.os, 'windows') }}
-
-    - name: archive
-      id: archive
-      run: |
-        # Ignore all but the first component of the os name
-        OSNAME=$(echo ${{ matrix.os }} | sed 's/-.*//')
-        VERSION=$GITHUB_REF_NAME
-        PKGNAME="binaryen-$VERSION-x86_64-$OSNAME"
-        TARBALL=$PKGNAME.tar.gz
-        SHASUM=$PKGNAME.tar.gz.sha256
-        rm -rf binaryen-$VERSION
-        mv out/install binaryen-$VERSION
-        tar -czf $TARBALL binaryen-$VERSION
-        # on Windows, MSYS2 will strip the carriage return from CMake output
-        cmake -E sha256sum $TARBALL > $SHASUM
-        echo "TARBALL=$TARBALL" >> $GITHUB_OUTPUT
-        echo "SHASUM=$SHASUM" >> $GITHUB_OUTPUT
-      if: matrix.os != 'windows-11-arm'
-
-    - name: archive-arm64
-      id: archive-arm64
-      run: |
-        # Ignore all but the first component of the os name
-        OSNAME=$(echo ${{ matrix.os }} | sed 's/-.*//')
-        VERSION=$GITHUB_REF_NAME
-        PKGNAME="binaryen-$VERSION-arm64-$OSNAME"
-        TARBALL=$PKGNAME.tar.gz
-        SHASUM=$PKGNAME.tar.gz.sha256
-        rm -rf binaryen-$VERSION
-        mv out-arm64/install binaryen-$VERSION
-        tar -czf $TARBALL binaryen-$VERSION
-        # on Windows, MSYS2 will strip the carriage return from CMake output
-        cmake -E sha256sum $TARBALL > $SHASUM
-        echo "TARBALL=$TARBALL" >> $GITHUB_OUTPUT
-        echo "SHASUM=$SHASUM" >> $GITHUB_OUTPUT
-      if: ${{ matrix.os == 'macos-14' || matrix.os == 'windows-11-arm' }}
-
-    - name: upload tarball
-      uses: softprops/action-gh-release@v1
-      with:
-        draft: true
-        files: |
-          ${{ steps.archive.outputs.TARBALL }}
-          ${{ steps.archive.outputs.SHASUM }}
-          ${{ steps.archive-arm64.outputs.TARBALL }}
-          ${{ steps.archive-arm64.outputs.SHASUM }}
-
-  # Build with gcc 6.3 and run tests on Alpine Linux (inside chroot).
-  # Keep in sync with ci.yml.
-  # Note: Alpine uses musl libc.
-  build-alpine:
-    name: alpine
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
-    steps:
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.x'
-    - uses: actions/checkout@v4
-      with:
-        submodules: true
-
-    - name: start docker
-      run: |
-        if [[ "${{ matrix.docker_platform }}" == "ubuntu-24.04-arm" ]]; then
-          platform="--platform=linux/arm64"
-        fi
-        docker run -w /src -dit $platform --name alpine -v $PWD:/src node:lts-alpine
-        echo 'docker exec alpine "$@";' > ./alpine.sh
-        chmod +x ./alpine.sh
-
-    - name: install packages
-      run: |
-        ./alpine.sh apk update
-        ./alpine.sh apk add build-base cmake git python3 py3-pip clang ninja util-linux
-
-    - name: avoid d8 tests (jsvu is not compatible with alpine)
-      run: |
-        ./alpine.sh rm -Rf test/lit/d8
-
-    - name: install python dev dependencies
-      run: ./alpine.sh pip3 install --break-system-packages -r requirements-dev.txt
-
-    - name: cmake
-      # Build with an 8MB stack size, as otherwise Alpine/musl's default stack
-      # size for pthreads is tiny,
-      # https://github.com/WebAssembly/binaryen/issues/8594
-      run: |
-        ./alpine.sh cmake . -G Ninja -DCMAKE_CXX_FLAGS="-static" -DCMAKE_C_FLAGS="-static" -DCMAKE_EXE_LINKER_FLAGS="-Wl,-z,stack-size=8388608" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBUILD_MIMALLOC=ON -DCMAKE_INSTALL_PREFIX=install
-
-    - name: build
-      run: |
-        ./alpine.sh ninja install
-
-    - name: test
-      run: ./alpine.sh python3 ./check.py
-
-    - name: archive
-      id: archive
-      run: |
-        VERSION=$GITHUB_REF_NAME
-        ARCH=$(./alpine.sh uname -m)
-        PKGNAME="binaryen-$VERSION-$ARCH-linux"
-        TARBALL=$PKGNAME.tar.gz
-        SHASUM=$PKGNAME.tar.gz.sha256
-        ./alpine.sh find install/ -type f -perm -u=x -exec strip {} +
-        mv install binaryen-$VERSION
-        tar -czf $TARBALL binaryen-$VERSION
-        cmake -E sha256sum $TARBALL > $SHASUM
-        echo "TARBALL=$TARBALL" >> $GITHUB_OUTPUT
-        echo "SHASUM=$SHASUM" >> $GITHUB_OUTPUT
-
-    - name: upload tarball
-      uses: softprops/action-gh-release@v1
-      with:
-        draft: true
-        files: |
-          ${{ steps.archive.outputs.TARBALL }}
-          ${{ steps.archive.outputs.SHASUM }}
-
-  # Build using Emscripten to JavaScript+WebAssembly.
-  build-node:
-    name: node
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-    steps:
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.x'
-    - uses: actions/checkout@v1
-      with:
-        submodules: true
-    - name: install ninja
-      run: sudo apt-get install ninja-build
-    - name: emsdk install
-      run: |
-        mkdir $HOME/emsdk
-        git clone --depth 1 https://github.com/emscripten-core/emsdk.git $HOME/emsdk
-        $HOME/emsdk/emsdk update-tags
-        $HOME/emsdk/emsdk install tot
-        $HOME/emsdk/emsdk activate tot
-    - name: update path
-      run:  echo "PATH=$PATH:$HOME/emsdk" >> $GITHUB_ENV
-
-    # Configure with wasm EH and pthreads for maximal performance.
-    - name: cmake
-      run: |
-        source $HOME/emsdk/emsdk_env.sh
-        emcmake cmake -S . -B out -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=out/install -DEMSCRIPTEN_ENABLE_WASM_EH=ON -DEMSCRIPTEN_ENABLE_PTHREADS=ON
-
-    # Build wasm-opt for now TODO add other tools as desired
-    - name: build
-      run: ninja -C out wasm-opt
-
-    # Minimal smoke test: roundtrip a file.
-    # TODO: Add more testing here, but the full test suite is overkill as there
-    #       is a 0.5 second cost to each run of wasm-opt.js
-    - name: test
-      run: |
-        node out/bin/wasm-opt.js test/hello_world.wat --print > out/t.wat
-        diff test/hello_world.wat out/t.wat
-
-    - name: archive
-      id: archive
-      run: |
-        VERSION=$GITHUB_REF_NAME
-        PKGNAME="binaryen-$VERSION-node"
-        TARBALL=$PKGNAME.tar.gz
-        SHASUM=$PKGNAME.tar.gz.sha256
-        mkdir binaryen-$VERSION
-        cp out/bin/wasm-opt* binaryen-$VERSION/
-        tar -czf $TARBALL binaryen-$VERSION
-        cmake -E sha256sum $TARBALL > $SHASUM
-        echo "TARBALL=$TARBALL" >> $GITHUB_OUTPUT
-        echo "SHASUM=$SHASUM" >> $GITHUB_OUTPUT
-
-    - name: upload tarball
-      uses: softprops/action-gh-release@v1
-      with:
-        draft: true
-        files: |
-          ${{ steps.archive.outputs.TARBALL }}
-          ${{ steps.archive.outputs.SHASUM }}
+      - name: Require an explicit release tag
+        run: |
+          [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" == version_*-tekacs.* ]]
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Build static Linux tools
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src alpine:3.22 sh -ec '
+            apk add --no-cache build-base cmake ninja git python3
+            cmake -S . -B out -G Ninja -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_LLVM_DWARF=ON \
+              -DBUILD_MIMALLOC=ON -DCMAKE_C_FLAGS=-static -DCMAKE_CXX_FLAGS=-static \
+              -DCMAKE_EXE_LINKER_FLAGS="-Wl,-z,stack-size=8388608"
+            cmake --build out --target wasm-opt wasm-dis --parallel 3
+          '
+      - name: Build native tools
+        if: runner.os != 'Linux'
+        run: |
+          args=()
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            args+=(-A "$ARCH" -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded)
+          else
+            args+=(-DCMAKE_OSX_ARCHITECTURES="$ARCH")
+          fi
+          cmake -S . -B out -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_LLVM_DWARF=ON "${args[@]}"
+          cmake --build out --config Release --target wasm-opt wasm-dis --parallel 3
+      - name: Verify release identity and DWARF
+        env:
+          BINARYEN_BIN: ${{ github.workspace }}/out/bin
+          BINARYEN_OUT_DIR: ${{ github.workspace }}/out/tests
+        run: |
+          version=$("out/bin/wasm-opt$SUFFIX" --version)
+          expected="wasm-opt version ${GITHUB_REF_NAME#version_}"
+          [[ "$version" == "$expected" || "$version" == "$expected ("* ]]
+          python3 -m unittest test.unit.test_dwarf test.unit.test_dwarf_lines --verbose
+      - name: Package tools and licenses
+        run: |
+          package="binaryen-$GITHUB_REF_NAME"
+          asset="$package-$PLATFORM.tar.gz"
+          mkdir -p "$package/bin" "$package/licenses"
+          cp "out/bin/wasm-opt$SUFFIX" "out/bin/wasm-dis$SUFFIX" "$package/bin/"
+          cp LICENSE "$package/licenses/Binaryen-LICENSE"
+          cp third_party/llvm-project/include/llvm/LICENSE.TXT "$package/licenses/LLVM-LICENSE.TXT"
+          cp third_party/llvm-project/include/llvm/Support/LICENSE.TXT "$package/licenses/LLVM-Support-LICENSE.TXT"
+          cp third_party/FP16/LICENSE "$package/licenses/FP16-LICENSE"
+          cp third_party/mimalloc/LICENSE "$package/licenses/mimalloc-LICENSE"
+          printf '%s\n' "$GITHUB_SHA" > "$package/SOURCE"
+          tar -czf "$asset" "$package"
+          cmake -E sha256sum "$asset" > "$asset.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaryen-${{ matrix.platform }}
+          path: |
+            binaryen-*.tar.gz
+            binaryen-*.tar.gz.sha256
+          if-no-files-found: error

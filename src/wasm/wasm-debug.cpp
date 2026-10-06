@@ -36,6 +36,7 @@
 #endif
 
 #include "llvm/ObjectYAML/DWARFYAML.h"
+#include "llvm/Support/LEB128.h"
 #include "llvm/include/llvm/DebugInfo/DWARFContext.h"
 
 std::error_code dwarf2yaml(llvm::DWARFContext& DCtx, llvm::DWARFYAML::Data& Y);
@@ -335,8 +336,8 @@ struct LineState {
       newOpcodes.push_back(item);
     }
     if (discriminator != old.discriminator) {
-      // len = 1 (subopcode) + 4 (wasm32 address)
-      auto item = makeItem(llvm::dwarf::DW_LNE_set_discriminator, 5);
+      auto item = makeItem(llvm::dwarf::DW_LNE_set_discriminator,
+                           1 + llvm::getULEB128Size(discriminator));
       item.Data = discriminator;
       newOpcodes.push_back(item);
     }
@@ -369,6 +370,8 @@ struct LineState {
 
   // Some flags are automatically reset after each debug line.
   void resetAfterLine() {
+    discriminator = 0;
+    basicBlock = false;
     prologueEnd = false;
     epilogueBegin = false;
   }
@@ -741,20 +744,17 @@ static void updateDebugLines(llvm::DWARFYAML::Data& data,
         } else if (locationUpdater.hasOldExprEnd(oldAddr)) {
           newAddr = locationUpdater.getNewExprEnd(oldAddr);
         }
-        if (newAddr && state.needToEmit()) {
-          // LLVM sometimes emits the same address more than once. We should
-          // probably investigate that.
-          if (newAddrInfo.contains(newAddr)) {
-            continue;
-          }
+        // LLVM sometimes emits the same address more than once.
+        if (newAddr && state.needToEmit() && !newAddrInfo.contains(newAddr)) {
           newAddrs.push_back(newAddr);
           newAddrInfo.emplace(newAddr, state);
           auto& updatedState = newAddrInfo.at(newAddr);
           // The only difference is the address TODO other stuff?
           updatedState.addr = newAddr;
-          // Reset relevant state.
-          state.resetAfterLine();
         }
+        // Every source row resets these flags, even if its code was removed
+        // or another row already describes the same output address.
+        state.resetAfterLine();
         if (opcode.Opcode == 0 &&
             opcode.SubOpcode == llvm::dwarf::DW_LNE_end_sequence) {
           sequenceId++;
@@ -777,6 +777,7 @@ static void updateDebugLines(llvm::DWARFYAML::Data& data,
         LineState lastState(table, -1);
         if (i != 0) {
           lastState = newAddrInfo.at(newAddrs[i - 1]);
+          lastState.resetAfterLine();
           // If the last line is in another sequence, clear the old state, as
           // there is nothing to diff to.
           if (lastState.sequenceId != state.sequenceId) {

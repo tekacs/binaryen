@@ -373,14 +373,16 @@ void dumpDebugLines(DWARFContext &DCtx, DWARFYAML::Data &Y) {
         DWARFYAML::LineTableOpcode NewOp = {};
         NewOp.Opcode = (dwarf::LineNumberOps)LineData.getU8(&Offset);
         if (NewOp.Opcode == 0) {
-          auto StartExt = Offset;
           NewOp.ExtLen = LineData.getULEB128(&Offset);
+          auto EndExt = Offset + NewOp.ExtLen;
           NewOp.SubOpcode =
               (dwarf::LineNumberExtendedOps)LineData.getU8(&Offset);
           switch (NewOp.SubOpcode) {
           case dwarf::DW_LNE_set_address:
-          case dwarf::DW_LNE_set_discriminator:
             NewOp.Data = LineData.getAddress(&Offset);
+            break;
+          case dwarf::DW_LNE_set_discriminator:
+            NewOp.Data = LineData.getULEB128(&Offset);
             break;
           case dwarf::DW_LNE_define_file:
             dumpFileEntry(LineData, Offset, NewOp.FileEntry);
@@ -388,7 +390,7 @@ void dumpDebugLines(DWARFContext &DCtx, DWARFYAML::Data &Y) {
           case dwarf::DW_LNE_end_sequence:
             break;
           default:
-            while (Offset < StartExt + NewOp.ExtLen)
+            while (Offset < EndExt)
               NewOp.UnknownOpcodeData.push_back(LineData.getU8(&Offset));
           }
         } else if (NewOp.Opcode < DebugLines.OpcodeBase) {
