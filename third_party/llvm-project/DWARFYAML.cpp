@@ -107,12 +107,14 @@ void MappingTraits<DWARFYAML::Unit>::mapping(IO &IO, DWARFYAML::Unit &Unit) {
 
 void MappingTraits<DWARFYAML::Entry>::mapping(IO &IO, DWARFYAML::Entry &Entry) {
   IO.mapRequired("AbbrCode", Entry.AbbrCode);
+  IO.mapOptional("AbbrSize", Entry.AbbrSize, 0u);
   IO.mapRequired("Values", Entry.Values);
 }
 
 void MappingTraits<DWARFYAML::FormValue>::mapping(
     IO &IO, DWARFYAML::FormValue &FormValue) {
   IO.mapOptional("Value", FormValue.Value);
+  IO.mapOptional("ByteSize", FormValue.ByteSize, 0u);
   if (!FormValue.CStr.empty() || !IO.outputting())
     IO.mapOptional("CStr", FormValue.CStr);
   if (!FormValue.BlockData.empty() || !IO.outputting())

@@ -823,6 +823,21 @@ static void iterContextAndYAML(const T& contextList, U& yamlList, W func) {
   assert(yamlValue == yamlList.end());
 }
 
+// DWARF v4 high_pc uses the form class, not one particular integer width.
+static bool relativePC(llvm::dwarf::Form form) {
+  switch (form) {
+    case llvm::dwarf::DW_FORM_data1:
+    case llvm::dwarf::DW_FORM_data2:
+    case llvm::dwarf::DW_FORM_data4:
+    case llvm::dwarf::DW_FORM_data8:
+    case llvm::dwarf::DW_FORM_udata:
+    case llvm::dwarf::DW_FORM_sdata:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // Updates a YAML entry from a DWARF DIE. Also updates LocationUpdater
 // associating each .debug_loc entry with the base address of its corresponding
 // compilation unit.
@@ -900,7 +915,7 @@ static void updateDIE(const llvm::DWARFDebugInfoEntry& DIE,
         return;
       }
       BinaryLocation oldValue = yamlValue.Value, newValue = 0;
-      bool isRelative = attrSpec.Form == llvm::dwarf::DW_FORM_data4;
+      bool isRelative = relativePC(attrSpec.Form);
       if (isRelative) {
         oldValue += oldLowPC;
       }
@@ -1059,7 +1074,7 @@ static void readDIEAddressRanges(DIEAddressInfo& info,
         lowPC = BinaryLocation(yamlValue.Value);
       } else if (attrSpec.Attr == llvm::dwarf::DW_AT_high_pc) {
         highPC = BinaryLocation(yamlValue.Value);
-        highPCIsRelative = attrSpec.Form == llvm::dwarf::DW_FORM_data4;
+        highPCIsRelative = relativePC(attrSpec.Form);
       } else if (attrSpec.Attr == llvm::dwarf::DW_AT_ranges) {
         rangesOffset = BinaryLocation(yamlValue.Value);
         info.rangesValue = &yamlValue;
@@ -1170,7 +1185,7 @@ writeUnavailableDIE(DIEAddressInfo& info,
         yamlValue.Value = AllOnesAddress;
       } else if (attrSpec.Attr == llvm::dwarf::DW_AT_high_pc) {
         yamlValue.Value =
-          attrSpec.Form == llvm::dwarf::DW_FORM_data4 ? 0 : AllOnesAddress;
+          relativePC(attrSpec.Form) ? 0 : AllOnesAddress;
       } else if (attrSpec.Attr == llvm::dwarf::DW_AT_ranges) {
         if (!emptyRangeListOffset) {
           emptyRangeListOffset = yaml.Ranges.size() * RangeEntrySize;

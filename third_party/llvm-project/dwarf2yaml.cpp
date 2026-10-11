@@ -208,11 +208,20 @@ void dumpDebugInfo(DWARFContext &DCtx, DWARFYAML::Data &Y) {
         continue;
 
       NewEntry.AbbrCode = EntryData.getULEB128(&offset);
+      NewEntry.AbbrSize = offset - DIE.getOffset();
 
       auto AbbrevDecl = DIE.getAbbreviationDeclarationPtr();
       if (AbbrevDecl) {
         for (const auto &AttrSpec : AbbrevDecl->attributes()) {
           DWARFYAML::FormValue NewValue;
+          const auto StartOffset = offset;
+          if (!DWARFFormValue::skipValue(AttrSpec.Form, EntryData, &offset,
+                                        CU->getFormParams()))
+            llvm_unreachable("cannot preserve DWARF attribute layout");
+          if (AttrSpec.Form == dwarf::DW_FORM_udata ||
+              AttrSpec.Form == dwarf::DW_FORM_sdata ||
+              AttrSpec.Form == dwarf::DW_FORM_ref_udata)
+            NewValue.ByteSize = offset - StartOffset;
           NewValue.Value = 0xDEADBEEFDEADBEEF;
           DWARFDie DIEWrapper(CU.get(), &DIE);
           auto FormValue = DIEWrapper.find(AttrSpec.Attr);

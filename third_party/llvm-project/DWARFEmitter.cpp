@@ -28,6 +28,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -173,6 +174,8 @@ class DumpVisitor : public DWARFYAML::ConstVisitor {
   raw_ostream &OS;
 
   size_t StartPos; // XXX BINARYEN
+  unsigned ByteSize = 0;
+  unsigned Attribute = 0;
 
 protected:
   void onStartCompileUnit(const DWARFYAML::Unit &CU) override {
@@ -197,7 +200,7 @@ protected:
   void onEndCompileUnit(const DWARFYAML::Unit &CU) {
     size_t EndPos = OS.tell();
     if (EndPos - StartPos != CU.Length.getLength() && !CU.AddrSizeChanged) {
-      errs() << "DWARF unit at " << StartPos << ": expected "
+      std::cerr << "DWARF unit at " << StartPos << ": expected "
              << CU.Length.getLength() << " bytes, emitted " << EndPos - StartPos
              << "; version " << CU.Version << ", abbreviations at "
              << CU.AbbrOffset << ", entries " << CU.Entries.size() << '\n';
@@ -208,7 +211,20 @@ protected:
 
   void onStartDIE(const DWARFYAML::Unit &CU,
                   const DWARFYAML::Entry &DIE) override {
-    encodeULEB128(DIE.AbbrCode, OS);
+    encodeULEB128(DIE.AbbrCode, OS, DIE.AbbrSize);
+  }
+
+  void onForm(const DWARFYAML::AttributeAbbrev &Abbrev,
+              const DWARFYAML::FormValue &Value) override {
+    ByteSize = Value.ByteSize;
+    Attribute = Abbrev.Attribute;
+  }
+
+  void checkWidth(unsigned Size, uint64_t Value) {
+    if (ByteSize && Size > ByteSize)
+      std::cerr << "DWARF LEB attribute " << Attribute << " at " << OS.tell()
+                << ": value " << Value << " needs " << Size
+                << " bytes, originally " << ByteSize << '\n';
   }
 
   void onValue(const uint8_t U) override {
@@ -224,16 +240,18 @@ protected:
   }
 
   void onValue(const uint64_t U, const bool LEB = false) override {
-    if (LEB)
-      encodeULEB128(U, OS);
-    else
+    if (LEB) {
+      checkWidth(getULEB128Size(U), U);
+      encodeULEB128(U, OS, ByteSize);
+    } else
       writeInteger(U, OS, DebugInfo.IsLittleEndian);
   }
 
   void onValue(const int64_t S, const bool LEB = false) override {
-    if (LEB)
-      encodeSLEB128(S, OS);
-    else
+    if (LEB) {
+      checkWidth(getSLEB128Size(S), S);
+      encodeSLEB128(S, OS, ByteSize);
+    } else
       writeInteger(S, OS, DebugInfo.IsLittleEndian);
   }
 
@@ -401,6 +419,7 @@ EmitDebugSectionImpl(const DWARFYAML::Data &DI, EmitFuncType EmitFunc,
 namespace {
 class DIEFixupVisitor : public DWARFYAML::Visitor {
   uint64_t Length;
+  unsigned ByteSize = 0;
 
 public:
   DIEFixupVisitor(DWARFYAML::Data &DI) : DWARFYAML::Visitor(DI){};
@@ -413,7 +432,12 @@ private:
   }
 
   virtual void onStartDIE(DWARFYAML::Unit &CU, DWARFYAML::Entry &DIE) {
-    Length += getULEB128Size(DIE.AbbrCode);
+    Length += std::max(getULEB128Size(DIE.AbbrCode), DIE.AbbrSize);
+  }
+
+  void onForm(DWARFYAML::AttributeAbbrev &,
+              DWARFYAML::FormValue &Value) override {
+    ByteSize = Value.ByteSize;
   }
 
   virtual void onValue(const uint8_t U) { Length += 1; }
@@ -421,13 +445,13 @@ private:
   virtual void onValue(const uint32_t U) { Length += 4; }
   virtual void onValue(const uint64_t U, const bool LEB = false) {
     if (LEB)
-      Length += getULEB128Size(U);
+      Length += std::max(getULEB128Size(U), ByteSize);
     else
       Length += 8;
   }
   virtual void onValue(const int64_t S, const bool LEB = false) {
     if (LEB)
-      Length += getSLEB128Size(S);
+      Length += std::max(getSLEB128Size(S), ByteSize);
     else
       Length += 8;
   }

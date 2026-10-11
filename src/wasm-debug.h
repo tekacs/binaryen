@@ -39,7 +39,11 @@ void dumpDWARF(const Module& wasm);
 // will disable optimizations that currently cause issues with debug info.)
 bool shouldPreserveDWARF(PassOptions& options, Module& wasm);
 
-// Update the DWARF sections.
+// Update the DWARF sections. Constant high_pc forms are offsets from low_pc,
+// independently of their integer encoding. Rewritten LEB values retain their
+// original byte widths so compilation-unit lengths and DIE references remain
+// valid. Values that cannot fit the existing layout remain a refusal, not a
+// partially relocated debug_info section.
 void writeDWARFSections(Module& wasm, const BinaryLocations& newLocations);
 
 } // namespace wasm::Debug

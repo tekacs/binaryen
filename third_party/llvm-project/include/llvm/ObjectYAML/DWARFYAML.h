@@ -115,11 +115,14 @@ struct FormValue {
   llvm::yaml::Hex64 Value;
   StringRef CStr;
   std::vector<llvm::yaml::Hex8> BlockData;
+  // Original scalar LEB width; zero means canonical encoding.
+  unsigned ByteSize = 0;
 };
 
 struct Entry {
   llvm::yaml::Hex32 AbbrCode;
   std::vector<FormValue> Values;
+  unsigned AbbrSize = 0;
 };
 
 struct Unit {

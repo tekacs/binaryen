@@ -156,9 +156,10 @@ Optional<DWARFFormValue> DWARFAbbreviationDeclaration::getAttributeValue(
 
   auto DebugInfoData = U.getDebugInfoExtractor();
 
-  // Add the byte size of ULEB that for the abbrev Code so we can start
-  // skipping the attribute data.
-  uint64_t Offset = DIEOffset + CodeByteSize;
+  // A DIE's abbreviation code can use a different (padded) ULEB width
+  // from the same code in the abbreviation declaration.
+  uint64_t Offset = DIEOffset;
+  DebugInfoData.getULEB128(&Offset);
   uint32_t AttrIndex = 0;
   for (const auto &Spec : AttributeSpecs) {
     if (*MatchAttrIndex == AttrIndex) {

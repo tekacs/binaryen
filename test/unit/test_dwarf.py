@@ -1,4 +1,5 @@
 import os
+import struct
 import subprocess
 import tempfile
 
@@ -7,7 +8,62 @@ from scripts.test import shared
 from . import utils
 
 
+def custom_section(name, contents):
+    name = name.encode()
+    payload = bytes([len(name)]) + name + contents
+    assert len(payload) < 128
+    return bytes([0, len(payload)]) + payload
+
+
 class DWARFTest(utils.BinaryenTestCase):
+    def test_constant_high_pc_preserves_die_offsets(self):
+        # These CUs are already unavailable. Every constant-form high_pc must
+        # become zero, not the absolute dead-address sentinel. Keep both the
+        # original integer widths and references to later DIEs unchanged.
+        forms = [
+            (0x0b, b'\x03', b'\x00'),                 # data1
+            (0x05, b'\x03\x00', bytes(2)),           # data2
+            (0x06, b'\x03\x00\x00\x00', bytes(4)),   # data4
+            (0x07, b'\x03' + bytes(7), bytes(8)),     # data8
+            (0x0f, b'\x0d', b'\x00'),                 # udata
+            (0x0f, b'\x81\x01', b'\x80\x00'),         # udata shrink
+            (0x0f, b'\x85\x00', b'\x80\x00'),         # padded udata
+            (0x0d, b'\xc1\x00', b'\x80\x00'),         # sdata shrink
+        ]
+        for form, before, after in forms:
+            for padded in (False, True):
+                with self.subTest(form=form, before=before, padded=padded):
+                    code = b'\x81\x00' if padded else b'\x01'
+                    ref_form = b'\x15' if padded else b'\x13'
+                    attrs = b'\x11\x01\x12' + bytes([form]) + b'\x03\x08\x00\x00'
+                    abbrev = (b'\x01\x11\x01' + attrs +
+                              b'\x02\x2e\x00' + attrs +
+                              b'\x03\x1d\x00\x31' + ref_form + b'\x00\x00\x00')
+                    root = code + b'\xff' * 4 + before + b'unit\x00'
+                    child_offset = 11 + len(root)
+                    reference = (bytes([child_offset | 0x80, 0]) if padded
+                                 else struct.pack('<I', child_offset))
+
+                    def info(high):
+                        body = (code + b'\xff' * 4 + high + b'unit\x00' +
+                                b'\x02' + b'\xff' * 4 + high + b'child\x00' +
+                                b'\x03' + reference + b'\x00')
+                        return struct.pack('<IHIB', 7 + len(body), 4, 0, 4) + body
+
+                    wasm = (bytes.fromhex('0061736d01000000') +
+                            custom_section('.debug_abbrev', abbrev) +
+                            custom_section('.debug_info', info(before)))
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        input_file = os.path.join(temp_dir, 'input.wasm')
+                        output_file = os.path.join(temp_dir, 'output.wasm')
+                        with open(input_file, 'wb') as f:
+                            f.write(wasm)
+                        shared.run_process(shared.WASM_OPT +
+                                           [input_file, '--roundtrip', '-g',
+                                            '-o', output_file])
+                        with open(output_file, 'rb') as f:
+                            self.assertIn(custom_section('.debug_info', info(after)), f.read())
+
     def test_overlapping_inline_siblings(self):
         # Make the outer lexical block valid and move one inlined call onto
         # its sibling's range. Both siblings must become unavailable: keeping
@@ -77,12 +133,6 @@ class DWARFTest(utils.BinaryenTestCase):
                 r'(?m)^00000000 00000000 (?!00000000)[0-9a-f]{8}$')
 
     def test_tombstone_roundtrip(self):
-        def custom_section(name, contents):
-            name = name.encode()
-            payload = bytes([len(name)]) + name + contents
-            self.assertLess(len(payload), 128)
-            return bytes([0, len(payload)]) + payload
-
         # A minimal DWARF v4 unit whose compile unit and subprogram both use
         # the all-ones dead-address sentinel for DW_AT_low_pc.
         sections = {

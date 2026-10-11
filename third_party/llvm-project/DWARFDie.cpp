@@ -677,7 +677,8 @@ DWARFDie::attribute_iterator::attribute_iterator(DWARFDie D, bool End)
     Index = AbbrDecl->getNumAttributes();
   } else {
     // This is the begin iterator so we extract the value for this->Index.
-    AttrValue.Offset = D.getOffset() + AbbrDecl->getCodeByteSize();
+    AttrValue.Offset = D.getOffset();
+    D.getDwarfUnit()->getDebugInfoExtractor().getULEB128(&AttrValue.Offset);
     updateForIndex(*AbbrDecl, 0);
   }
 }
