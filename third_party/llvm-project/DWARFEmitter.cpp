@@ -197,6 +197,10 @@ protected:
   void onEndCompileUnit(const DWARFYAML::Unit &CU) {
     size_t EndPos = OS.tell();
     if (EndPos - StartPos != CU.Length.getLength() && !CU.AddrSizeChanged) {
+      errs() << "DWARF unit at " << StartPos << ": expected "
+             << CU.Length.getLength() << " bytes, emitted " << EndPos - StartPos
+             << "; version " << CU.Version << ", abbreviations at "
+             << CU.AbbrOffset << ", entries " << CU.Entries.size() << '\n';
       llvm_unreachable("compile unit size was incorrect "
                        "(this may be an unsupported version of DWARF)");
     }
