@@ -56,7 +56,9 @@ DWARFDebugArangeSet::extract(DataExtractor data, uint64_t *offset_ptr) {
     HeaderData.SegSize = data.getU8(offset_ptr);
 
     // Perform basic validation of the header fields.
-    if (!data.isValidOffsetForDataOfSize(Offset, HeaderData.Length) ||
+    if (HeaderData.Length < 8 ||
+        !data.isValidOffsetForDataOfSize(Offset + 4, HeaderData.Length) ||
+        HeaderData.Version != 2 || HeaderData.SegSize != 0 ||
         (HeaderData.AddrSize != 4 && HeaderData.AddrSize != 8)) {
       clear();
       return false;
@@ -81,7 +83,8 @@ DWARFDebugArangeSet::extract(DataExtractor data, uint64_t *offset_ptr) {
                   "Different datatypes for addresses and sizes!");
     assert(sizeof(arangeDescriptor.Address) >= HeaderData.AddrSize);
 
-    while (data.isValidOffset(*offset_ptr)) {
+    const uint64_t End = Offset + 4 + HeaderData.Length;
+    while (*offset_ptr <= End && End - *offset_ptr >= tuple_size) {
       arangeDescriptor.Address = data.getUnsigned(offset_ptr, HeaderData.AddrSize);
       arangeDescriptor.Length = data.getUnsigned(offset_ptr, HeaderData.AddrSize);
 
@@ -89,11 +92,14 @@ DWARFDebugArangeSet::extract(DataExtractor data, uint64_t *offset_ptr) {
       // for the length.
       if (arangeDescriptor.Address || arangeDescriptor.Length)
         ArangeDescriptors.push_back(arangeDescriptor);
-      else
-        break; // We are done if we get a zero address and length
+      else {
+        // An empty terminated set is still a decoded CU header. Consumers must
+        // retain it (and continue to following sets), including for relocation.
+        *offset_ptr = End;
+        return true;
+      }
     }
-
-    return !ArangeDescriptors.empty();
+    clear();
   }
   return false;
 }

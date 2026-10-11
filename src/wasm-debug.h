@@ -40,10 +40,13 @@ void dumpDWARF(const Module& wasm);
 bool shouldPreserveDWARF(PassOptions& options, Module& wasm);
 
 // Update the DWARF sections. Constant high_pc forms are offsets from low_pc,
-// independently of their integer encoding. Rewritten LEB values retain their
-// original byte widths so compilation-unit lengths and DIE references remain
-// valid. Values that cannot fit the existing layout remain a refusal, not a
-// partially relocated debug_info section.
+// independently of their integer encoding. LEB encodings keep their padding;
+// growth recomputes the info layout and relocates unit-relative/absolute DIE
+// references and aranges CU offsets together, including ref_udata growth.
+// Reference-free DWARF expressions, including nested entry values, stay intact.
+// CUT: relocation refuses expressions with DIE references or unknown opcodes,
+// specialized unit headers and unmodeled debug sections. Fixed-width reference
+// overflow also refuses; none of these cases silently drops debug information.
 void writeDWARFSections(Module& wasm, const BinaryLocations& newLocations);
 
 } // namespace wasm::Debug

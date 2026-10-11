@@ -37,6 +37,10 @@ void EmitDebugLoc(raw_ostream &OS, const Data &DI); // XXX BINARYEN
 void EmitPubSection(raw_ostream &OS, const PubSection &Sect,
                     bool IsLittleEndian);
 void EmitDebugInfo(raw_ostream &OS, const Data &DI);
+// Compute lengths for authored YAML, or relocate decoded info using its original
+// offsets. Relocation returns whether any original info position/length changed.
+void ComputeDebugInfo(Data &DI);
+bool RelocateDebugInfo(Data &DI);
 void EmitDebugLine(raw_ostream &OS, const Data &DI);
 // XXX BINARYEN: Same as EmitDebugLine but also update the Length field in
 //               the YAML as we write. We use that information to update

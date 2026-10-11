@@ -11,6 +11,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFDebugArangeSet.h"
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
 #include "llvm/ObjectYAML/DWARFYAML.h"
+#include "llvm/Support/ErrorHandling.h"
 
 #include <algorithm>
 
@@ -72,7 +73,9 @@ void dumpDebugARanges(DWARFContext &DCtx, DWARFYAML::Data &Y) {
   uint64_t Offset = 0;
   DWARFDebugArangeSet Set;
 
-  while (Set.extract(ArangesData, &Offset)) {
+  while (ArangesData.isValidOffset(Offset)) {
+    if (!Set.extract(ArangesData, &Offset))
+      report_fatal_error("cannot decode complete DWARF aranges section");
     DWARFYAML::ARange Range;
     Range.Length.setLength(Set.getHeader().Length);
     Range.Version = Set.getHeader().Version;
@@ -190,7 +193,12 @@ void dumpDebugPubSections(DWARFContext &DCtx, DWARFYAML::Data &Y) {
 void dumpDebugInfo(DWARFContext &DCtx, DWARFYAML::Data &Y) {
   for (const auto &CU : DCtx.compile_units()) {
     DWARFYAML::Unit NewUnit;
+    NewUnit.Offset = CU->getOffset();
     NewUnit.Length.setLength(CU->getLength());
+    if (CU->getFormParams().Format == dwarf::DWARF64) {
+      NewUnit.Length.TotalLength = UINT32_MAX;
+      NewUnit.Length.TotalLength64 = CU->getLength();
+    }
     NewUnit.Version = CU->getVersion();
     if(NewUnit.Version >= 5)
       NewUnit.Type = (dwarf::UnitType)CU->getUnitType();
@@ -200,6 +208,7 @@ void dumpDebugInfo(DWARFContext &DCtx, DWARFYAML::Data &Y) {
     NewUnit.AddrSize = CU->getAddressByteSize();
     for (auto DIE : CU->dies()) {
       DWARFYAML::Entry NewEntry;
+      NewEntry.Offset = DIE.getOffset();
       DataExtractor EntryData = CU->getDebugInfoExtractor();
       uint64_t offset = DIE.getOffset();
 

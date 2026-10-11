@@ -968,7 +968,6 @@ static void updateCompileUnits(const BinaryenDWARFInfo& info,
       auto NewAddrSize = is64 ? 8 : 4;
       if (NewAddrSize != yamlUnit.AddrSize) {
         yamlUnit.AddrSize = NewAddrSize;
-        yamlUnit.AddrSizeChanged = true;
       }
       // Process the DIEs in each compile unit.
       iterContextAndYAML(
@@ -1184,8 +1183,7 @@ writeUnavailableDIE(DIEAddressInfo& info,
       if (attrSpec.Attr == llvm::dwarf::DW_AT_low_pc) {
         yamlValue.Value = AllOnesAddress;
       } else if (attrSpec.Attr == llvm::dwarf::DW_AT_high_pc) {
-        yamlValue.Value =
-          relativePC(attrSpec.Form) ? 0 : AllOnesAddress;
+        yamlValue.Value = relativePC(attrSpec.Form) ? 0 : AllOnesAddress;
       } else if (attrSpec.Attr == llvm::dwarf::DW_AT_ranges) {
         if (!emptyRangeListOffset) {
           emptyRangeListOffset = yaml.Ranges.size() * RangeEntrySize;
@@ -1477,6 +1475,20 @@ void writeDWARFSections(Module& wasm, const BinaryLocations& newLocations) {
   }
 
   updateLoc(data, locationUpdater);
+
+  // Moving DIEs requires every retained consumer of info offsets to agree.
+  // CUT: unmodeled sections cannot be passed through after info relocation.
+  if (llvm::DWARFYAML::RelocateDebugInfo(data)) {
+    for (const auto& section : wasm.customSections) {
+      Name name(section.name);
+      if (isDWARFSection(name) && name != ".debug_info" &&
+          name != ".debug_abbrev" && name != ".debug_str" &&
+          name != ".debug_line" && name != ".debug_ranges" &&
+          name != ".debug_loc" && name != ".debug_aranges") {
+        Fatal() << "DWARF info relocation does not support " << name;
+      }
+    }
+  }
 
   // Convert to binary sections.
   auto newSections =

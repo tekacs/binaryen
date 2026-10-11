@@ -120,18 +120,19 @@ struct FormValue {
 };
 
 struct Entry {
+  uint64_t Offset = 0; // Original .debug_info position, set by dwarf2yaml.
   llvm::yaml::Hex32 AbbrCode;
   std::vector<FormValue> Values;
   unsigned AbbrSize = 0;
 };
 
 struct Unit {
+  uint64_t Offset = 0; // Original .debug_info position, set by dwarf2yaml.
   InitialLength Length;
   uint16_t Version;
   llvm::dwarf::UnitType Type; // Added in DWARF 5
   uint32_t AbbrOffset;
   uint8_t AddrSize;
-  bool AddrSizeChanged = false;  // XXX BINARYEN
   std::vector<Entry> Entries;
 };
 

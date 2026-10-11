@@ -40,6 +40,7 @@ SET(llvm_dwarf_SOURCES
   DWARFFormValue.cpp
   DWARFGdbIndex.cpp
   DWARFListTable.cpp
+  DWARFLayout.cpp
   DWARFTypeUnit.cpp
   DWARFUnit.cpp
   DWARFUnitIndex.cpp

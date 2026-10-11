@@ -175,7 +175,6 @@ class DumpVisitor : public DWARFYAML::ConstVisitor {
 
   size_t StartPos; // XXX BINARYEN
   unsigned ByteSize = 0;
-  unsigned Attribute = 0;
 
 protected:
   void onStartCompileUnit(const DWARFYAML::Unit &CU) override {
@@ -185,21 +184,20 @@ protected:
     if(CU.Version >= 5) {
       writeInteger((uint8_t)CU.Type, OS, DebugInfo.IsLittleEndian);
       writeInteger((uint8_t)CU.AddrSize, OS, DebugInfo.IsLittleEndian);
-      writeInteger((uint32_t)CU.AbbrOffset, OS, DebugInfo.IsLittleEndian);
+      writeVariableSizedInteger(CU.AbbrOffset, CU.Length.isDWARF64() ? 8 : 4,
+                                OS, DebugInfo.IsLittleEndian);
     }else {
-      writeInteger((uint32_t)CU.AbbrOffset, OS, DebugInfo.IsLittleEndian);
+      writeVariableSizedInteger(CU.AbbrOffset, CU.Length.isDWARF64() ? 8 : 4,
+                                OS, DebugInfo.IsLittleEndian);
       writeInteger((uint8_t)CU.AddrSize, OS, DebugInfo.IsLittleEndian);
     }
   }
 
-  // XXX BINARYEN Make sure we emit the right size. We should not change the
-  // size as we only modify relocatable fields like addresses, and such fields
-  // have a fixed size, so any change is a bug.
-  // We make an exception for AddrSizeChanged, which happens when we have run
-  // the Memory64Lowering pass to turn wasm64 into wasm32.
+  // Emission must agree with the computed layout; references were relocated
+  // against precisely these lengths.
   void onEndCompileUnit(const DWARFYAML::Unit &CU) {
     size_t EndPos = OS.tell();
-    if (EndPos - StartPos != CU.Length.getLength() && !CU.AddrSizeChanged) {
+    if (EndPos - StartPos != CU.Length.getLength()) {
       std::cerr << "DWARF unit at " << StartPos << ": expected "
              << CU.Length.getLength() << " bytes, emitted " << EndPos - StartPos
              << "; version " << CU.Version << ", abbreviations at "
@@ -214,17 +212,9 @@ protected:
     encodeULEB128(DIE.AbbrCode, OS, DIE.AbbrSize);
   }
 
-  void onForm(const DWARFYAML::AttributeAbbrev &Abbrev,
+  void onForm(const DWARFYAML::AttributeAbbrev &,
               const DWARFYAML::FormValue &Value) override {
     ByteSize = Value.ByteSize;
-    Attribute = Abbrev.Attribute;
-  }
-
-  void checkWidth(unsigned Size, uint64_t Value) {
-    if (ByteSize && Size > ByteSize)
-      std::cerr << "DWARF LEB attribute " << Attribute << " at " << OS.tell()
-                << ": value " << Value << " needs " << Size
-                << " bytes, originally " << ByteSize << '\n';
   }
 
   void onValue(const uint8_t U) override {
@@ -241,7 +231,6 @@ protected:
 
   void onValue(const uint64_t U, const bool LEB = false) override {
     if (LEB) {
-      checkWidth(getULEB128Size(U), U);
       encodeULEB128(U, OS, ByteSize);
     } else
       writeInteger(U, OS, DebugInfo.IsLittleEndian);
@@ -249,7 +238,6 @@ protected:
 
   void onValue(const int64_t S, const bool LEB = false) override {
     if (LEB) {
-      checkWidth(getSLEB128Size(S), S);
       encodeSLEB128(S, OS, ByteSize);
     } else
       writeInteger(S, OS, DebugInfo.IsLittleEndian);
@@ -416,53 +404,6 @@ EmitDebugSectionImpl(const DWARFYAML::Data &DI, EmitFuncType EmitFunc,
     OutputBuffers[Sec] = MemoryBuffer::getMemBufferCopy(Data);
 }
 
-namespace {
-class DIEFixupVisitor : public DWARFYAML::Visitor {
-  uint64_t Length;
-  unsigned ByteSize = 0;
-
-public:
-  DIEFixupVisitor(DWARFYAML::Data &DI) : DWARFYAML::Visitor(DI){};
-
-private:
-  virtual void onStartCompileUnit(DWARFYAML::Unit &CU) { Length = 7; }
-
-  virtual void onEndCompileUnit(DWARFYAML::Unit &CU) {
-    CU.Length.setLength(Length);
-  }
-
-  virtual void onStartDIE(DWARFYAML::Unit &CU, DWARFYAML::Entry &DIE) {
-    Length += std::max(getULEB128Size(DIE.AbbrCode), DIE.AbbrSize);
-  }
-
-  void onForm(DWARFYAML::AttributeAbbrev &,
-              DWARFYAML::FormValue &Value) override {
-    ByteSize = Value.ByteSize;
-  }
-
-  virtual void onValue(const uint8_t U) { Length += 1; }
-  virtual void onValue(const uint16_t U) { Length += 2; }
-  virtual void onValue(const uint32_t U) { Length += 4; }
-  virtual void onValue(const uint64_t U, const bool LEB = false) {
-    if (LEB)
-      Length += std::max(getULEB128Size(U), ByteSize);
-    else
-      Length += 8;
-  }
-  virtual void onValue(const int64_t S, const bool LEB = false) {
-    if (LEB)
-      Length += std::max(getSLEB128Size(S), ByteSize);
-    else
-      Length += 8;
-  }
-  virtual void onValue(const StringRef String) { Length += String.size() + 1; }
-
-  virtual void onValue(const MemoryBufferRef MBR) {
-    Length += MBR.getBufferSize();
-  }
-};
-} // namespace
-
 Expected<StringMap<std::unique_ptr<MemoryBuffer>>>
 DWARFYAML::EmitDebugSections(StringRef YAMLString, bool ApplyFixups,
                              bool IsLittleEndian) {
@@ -474,10 +415,8 @@ DWARFYAML::EmitDebugSections(StringRef YAMLString, bool ApplyFixups,
   if (YIn.error())
     return errorCodeToError(YIn.error());
 
-  if (ApplyFixups) {
-    DIEFixupVisitor DIFixer(DI);
-    DIFixer.traverseDebugInfo();
-  }
+  if (ApplyFixups)
+    ComputeDebugInfo(DI);
 
   StringMap<std::unique_ptr<MemoryBuffer>> DebugSections;
   EmitDebugSectionImpl(DI, &DWARFYAML::EmitDebugInfo, "debug_info",
@@ -498,10 +437,8 @@ namespace llvm {
 namespace DWARFYAML {
 StringMap<std::unique_ptr<MemoryBuffer>>
 EmitDebugSections(llvm::DWARFYAML::Data &DI, bool ApplyFixups) {
-  if (ApplyFixups) {
-    DIEFixupVisitor DIFixer(DI);
-    DIFixer.traverseDebugInfo();
-  }
+  if (ApplyFixups)
+    ComputeDebugInfo(DI);
 
   StringMap<std::unique_ptr<MemoryBuffer>> DebugSections;
   EmitDebugSectionImpl(DI, &DWARFYAML::EmitDebugInfo, "debug_info",
