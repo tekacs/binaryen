@@ -76,7 +76,9 @@ jobs:
             args+=(-DCMAKE_OSX_ARCHITECTURES="$ARCH")
           fi
           cmake -S . -B out -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_LLVM_DWARF=ON "${args[@]}"
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTS=OFF -DBUILD_LLVM_DWARF=ON \
+            -DCMAKE_C_FLAGS="-ffile-prefix-map=$PWD=/src" \
+            -DCMAKE_CXX_FLAGS="-ffile-prefix-map=$PWD=/src" "${args[@]}"
           cmake --build out --config Release --target wasm-opt wasm-dis --parallel 3
       - name: Verify release identity and DWARF
         env:
@@ -86,8 +88,10 @@ jobs:
           version=$("out/bin/wasm-opt$SUFFIX" --version)
           expected="wasm-opt version ${GITHUB_REF_NAME#version_}"
           [[ "$version" == "$expected" || "$version" == "$expected ("* ]]
-          python3 -m unittest test.unit.test_dwarf test.unit.test_dwarf_lines --verbose
+          python3 -m unittest test.unit.test_dwarf test.unit.test_dwarf_lines test.unit.test_dwarf_layout --verbose
       - name: Package tools and licenses
+        env:
+          COPYFILE_DISABLE: '1'
         run: |
           package="binaryen-$GITHUB_REF_NAME"
           asset="$package-$PLATFORM.tar.gz"
@@ -99,7 +103,11 @@ jobs:
           cp third_party/FP16/LICENSE "$package/licenses/FP16-LICENSE"
           cp third_party/mimalloc/LICENSE "$package/licenses/mimalloc-LICENSE"
           printf '%s\n' "$GITHUB_SHA" > "$package/SOURCE"
-          tar -czf "$asset" "$package"
+          tar_args=(--no-xattrs)
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            tar_args+=(--no-mac-metadata)
+          fi
+          tar "${tar_args[@]}" -czf "$asset" "$package"
           cmake -E sha256sum "$asset" > "$asset.sha256"
       - uses: actions/upload-artifact@v4
         with:
